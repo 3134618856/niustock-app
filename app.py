@@ -42,7 +42,12 @@ def save_watchlist(wl):
 
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
-        
+
+if "current_code" not in st.session_state:
+    st.session_state.current_code = "600519"
+
+if "current_name" not in st.session_state:
+    st.session_state.current_name = "贵州茅台"
 # === 获取全市场股票代码与名称对照表 ===
 @st.cache_data(ttl=86400)
 def get_all_stocks():

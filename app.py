@@ -33,13 +33,16 @@ import os
 
 # 兼容本地的测试和云端分享
 def load_watchlist():
-    if "cloud_watchlist" not in st.session_state:
-        st.session_state.cloud_watchlist = {}
-    return st.session_state.cloud_watchlist
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = {}
+    return st.session_state.watchlist
 
 def save_watchlist(wl):
-    st.session_state.cloud_watchlist = wl
+    st.session_state.watchlist = wl
 
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = load_watchlist()
+        
 # === 获取全市场股票代码与名称对照表 ===
 @st.cache_data(ttl=86400)
 def get_all_stocks():

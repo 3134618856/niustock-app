@@ -33,21 +33,13 @@ import os
 
 # 兼容本地的测试和云端分享
 def load_watchlist():
-    if "watchlist" not in st.session_state:
-        st.session_state.watchlist = {}
-    return st.session_state.watchlist
+    if "cloud_watchlist" not in st.session_state:
+        st.session_state.cloud_watchlist = {}
+    return st.session_state.cloud_watchlist
 
 def save_watchlist(wl):
-    st.session_state.watchlist = wl
+    st.session_state.cloud_watchlist = wl
 
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
-
-if "current_code" not in st.session_state:
-    st.session_state.current_code = "600519"
-
-if "current_name" not in st.session_state:
-    st.session_state.current_name = "贵州茅台"
 # === 获取全市场股票代码与名称对照表 ===
 @st.cache_data(ttl=86400)
 def get_all_stocks():
@@ -113,10 +105,16 @@ enable_alert = st.sidebar.checkbox("开启支撑/压力位破位警报", value=T
 # === 解析当前要查询的股票 ===
 if query_code:
     st.session_state.current_code = query_code
-    if not all_stocks.empty:
-        match = all_stocks[all_stocks['code'] == query_code]
-        if not match.empty:
-            st.session_state.current_name = match.iloc[0]['name']
+    st.session_state.current_name = "加载中..."
+    try:
+        info = ak.stock_individual_info_em(symbol=query_code)
+        st.session_state.current_name = info.loc[info['item'] == '股票简称', 'value'].values[0]
+    except Exception:
+        try:
+            df = ak.stock_bid_ask_em(symbol=query_code)
+            st.session_state.current_name = df.loc[df['item'] == '名称', 'value'].values[0]
+        except Exception:
+            st.session_state.current_name = query_code
 elif query_name:
     if not all_stocks.empty:
         match = all_stocks[all_stocks['name'].str.contains(query_name)]
@@ -374,3 +372,15 @@ with tab4:
         st.warning(f"暂时无法获取板块热度数据。原因：{concept_err}")
     else:
         st.dataframe(concept_df, hide_index=True, use_container_width=True)
+if query_code:
+    st.session_state.current_code = query_code
+    st.session_state.current_name = "加载中..."
+    try:
+        info = ak.stock_individual_info_em(symbol=query_code)
+        st.session_state.current_name = info.loc[info['item'] == '股票简称', 'value'].values[0]
+    except Exception:
+        try:
+            df = ak.stock_bid_ask_em(symbol=query_code)
+            st.session_state.current_name = df.loc[df['item'] == '名称', 'value'].values[0]
+        except Exception:
+            st.session_state.current_name = query_code

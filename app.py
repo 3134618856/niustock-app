@@ -33,12 +33,20 @@ import os
 
 # 兼容本地的测试和云端分享
 def load_watchlist():
-    if "cloud_watchlist" not in st.session_state:
-        st.session_state.cloud_watchlist = {}
-    return st.session_state.cloud_watchlist
+    if "watchlist" not in st.session_state:
+        return {}
+    return st.session_state.watchlist
 
 def save_watchlist(wl):
-    st.session_state.cloud_watchlist = wl
+    st.session_state.watchlist = wl
+
+# 强制初始化所有需要的状态，防止云端 KeyError
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = load_watchlist()
+if "current_code" not in st.session_state:
+    st.session_state.current_code = "600519"
+if "current_name" not in st.session_state:
+    st.session_state.current_name = "贵州茅台"
 
 # === 获取全市场股票代码与名称对照表 ===
 @st.cache_data(ttl=86400)

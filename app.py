@@ -113,7 +113,10 @@ enable_alert = st.sidebar.checkbox("开启支撑/压力位破位警报", value=T
 # === 解析当前要查询的股票 ===
 if query_code:
     st.session_state.current_code = query_code
-    st.session_state.current_name = "加载中..."
+    # 自带一个小型本地字典，防止云端被拦截时名字出不来
+    local_dict = {"600519": "贵州茅台", "600667": "太极实业", "000001": "平安银行"}
+    st.session_state.current_name = local_dict.get(query_code, query_code)
+    
     try:
         info = ak.stock_individual_info_em(symbol=query_code)
         st.session_state.current_name = info.loc[info['item'] == '股票简称', 'value'].values[0]
@@ -122,7 +125,8 @@ if query_code:
             df = ak.stock_bid_ask_em(symbol=query_code)
             st.session_state.current_name = df.loc[df['item'] == '名称', 'value'].values[0]
         except Exception:
-            st.session_state.current_name = query_code
+            pass  # 如果东财接口在云端被拦截，就安静地跳过，保留本地字典里的名字
+
 elif query_name:
     if not all_stocks.empty:
         match = all_stocks[all_stocks['name'].str.contains(query_name)]

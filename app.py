@@ -26,7 +26,7 @@ st.markdown(hide_menu_style, unsafe_allow_html=True)
 st.title("📈 个股压力/支撑 & 信息面助手")
 
 # ==========================================
-# 🌟 自选股数据管理（兼容云端）
+# 🌟 自选股数据管理
 # ==========================================
 def load_watchlist():
     if "watchlist" not in st.session_state:
@@ -139,7 +139,7 @@ if not code:
 # 数据获取模块
 # ==========================================
 
-# 🌟 修复：使用东财底层接口获取盘口，盘中绝对稳定
+# 盘口五档
 @st.cache_data(ttl=3)
 def load_order_book(c):
     try:
@@ -154,7 +154,6 @@ def load_order_book(c):
         data = res.json().get("data")
         if not data: return None
         
-        # 东财返回的盘口价格和挂单量需要除以 100
         return {
             "买1价": data.get("f19", 0) / 100, "买1量": data.get("f20", 0) / 100,
             "买2价": data.get("f17", 0) / 100, "买2量": data.get("f18", 0) / 100,
@@ -197,9 +196,12 @@ def load_daily(c, n):
     except Exception: pass
     return pd.DataFrame(), "无"
 
-# 获取分时数据
+# 🌟 分时图：支持实时与历史回看
+@st.cache_data(ttl=60)
+# 🌟 分时图：支持实时与历史回看（修复均价比例）
 @st.cache_data(ttl=60)
 def load_intraday(c):
+    # 方法1：尝试获取今天的实时分时
     try:
         df = ak.stock_intraday_em(symbol=c)
         if not df.empty:
@@ -208,13 +210,35 @@ def load_intraday(c):
             df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
             df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
             
+            # ⚠️ 关键修复：成交量通常是"手"，1手=100股，成交额是"元"，要统一单位
             df['cum_amt'] = df['成交额'].cumsum()
-            df['cum_vol'] = df['成交量'].cumsum()
+            df['cum_vol'] = df['成交量'].cumsum() * 100 
             df['均价'] = df.apply(lambda row: row['cum_amt'] / row['cum_vol'] if row['cum_vol'] > 0 else row['最新价'], axis=1)
-            return df
+            return df, "今日实时"
     except Exception:
         pass
-    return pd.DataFrame()
+
+    # 方法2：获取最近一个交易日的1分钟历史数据（周末复盘专用）
+    try:
+        df_min = ak.stock_zh_a_hist_min_em(symbol=c, period="1")
+        if not df_min.empty:
+            df_min['时间'] = pd.to_datetime(df_min['时间'])
+            last_date = df_min['时间'].dt.date.max()
+            df = df_min[df_min['时间'].dt.date == last_date].copy()
+            df = df.rename(columns={'收盘': '最新价'})
+            
+            # ⚠️ 关键修复：同上，单位换算
+            df['cum_amt'] = df['成交额'].cumsum()
+            df['cum_vol'] = df['成交量'].cumsum() * 100
+            df['均价'] = df.apply(lambda row: row['cum_amt'] / row['cum_vol'] if row['cum_vol'] > 0 else row['最新价'], axis=1)
+            
+            # 过滤掉集合竞价前的异常数据
+            df = df[df['时间'].dt.strftime('%H:%M') >= '09:30']
+            return df, f"{last_date} (历史回看)"
+    except Exception:
+        pass
+
+    return pd.DataFrame(), "无"
 
 @st.cache_data(ttl=600)
 def load_fund_flow(c):
@@ -281,7 +305,7 @@ with st.spinner("正在拉取行情、分时、盘口与资金数据..."):
     df_daily, source_name = load_daily(code, lookback)
     fund_df, fund_err = load_fund_flow(code)
     order_book = load_order_book(code)
-    intraday_df = load_intraday(code)
+    intraday_df, intraday_status = load_intraday(code)
     concept_df, concept_err = load_concept_heat()
 
 if df_daily.empty:
@@ -330,13 +354,17 @@ st.divider()
 # ==========================================
 # 标签页
 # ==========================================
-tab0, tab1, tab2, tab3, tab4 = st.tabs(["⏱️ 当日分时图", "📈 日K线图", "📍 价位明细", "💰 资金流向 (近10日)", "📰 个股新闻 & 🔥 板块热度"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["⏱️ 分时走势", "📈 日K线图", "📍 价位明细", "💰 资金流向 (近10日)", "📰 个股新闻 & 🔥 板块热度"])
 
 # === ⏱️ 分时图 Tab ===
 with tab0:
     if intraday_df.empty:
-        st.info("💡 分时数据暂不可用（可能处于非交易时段或接口维护）。请在开盘时间查看！")
+        st.info("💡 分时数据暂不可用。")
     else:
+        # 提示当前显示的是实时还是历史
+        st.caption(f"数据状态：{intraday_status}")
+        
+        # 昨收价
         prev_close = df_daily.iloc[-2]['close'] if len(df_daily) >= 2 else df_daily.iloc[-1]['close']
         
         fig_intra = go.Figure()
@@ -344,7 +372,11 @@ with tab0:
         fig_intra.add_trace(go.Scatter(x=intraday_df['时间'], y=intraday_df['均价'], mode='lines', name='均价', line=dict(color='orange', width=1.5)))
         fig_intra.add_hline(y=prev_close, line_dash="dash", line_color="gray", annotation_text=f"昨收: {prev_close:.2f}", annotation_position="top left")
         
-        fig_intra.update_xaxes(type='date', tickformat='%H:%M', title_text="时间", nticks=10)
+                # 告诉图表：11:30 到 13:00 是休市时间，直接跳过，不要连线
+        fig_intra.update_xaxes(
+            type='date', tickformat='%H:%M', title_text="时间", nticks=10,
+            rangebreaks=[dict(bounds=["11:30", "13:00"])]
+        )
         fig_intra.update_yaxes(title_text="价格")
         fig_intra.update_layout(height=500, margin=dict(l=10, r=10, t=30, b=10), hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
         st.plotly_chart(fig_intra, use_container_width=True, config={'locale': 'zh-CN', 'displaylogo': False})

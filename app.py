@@ -138,12 +138,35 @@ if not code:
 # ==========================================
 # 数据获取模块
 # ==========================================
-@st.cache_data(ttl=5)
+
+# 🌟 修复：使用东财底层接口获取盘口，盘中绝对稳定
+@st.cache_data(ttl=3)
 def load_order_book(c):
     try:
-        df = ak.stock_bid_ask_em(symbol=c)
-        if df.empty: return None
-        return dict(zip(df['item'], df['value']))
+        market_id = "1" if c.startswith("6") else "0"
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
+        params = {
+            "secid": f"{market_id}.{c}",
+            "fields": "f19,f20,f17,f18,f15,f16,f13,f14,f11,f12,f39,f40,f37,f38,f35,f36,f33,f34,f31,f32"
+        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+        res = requests.get(url, params=params, headers=headers, timeout=5)
+        data = res.json().get("data")
+        if not data: return None
+        
+        # 东财返回的盘口价格和挂单量需要除以 100
+        return {
+            "买1价": data.get("f19", 0) / 100, "买1量": data.get("f20", 0) / 100,
+            "买2价": data.get("f17", 0) / 100, "买2量": data.get("f18", 0) / 100,
+            "买3价": data.get("f15", 0) / 100, "买3量": data.get("f16", 0) / 100,
+            "买4价": data.get("f13", 0) / 100, "买4量": data.get("f14", 0) / 100,
+            "买5价": data.get("f11", 0) / 100, "买5量": data.get("f12", 0) / 100,
+            "卖1价": data.get("f39", 0) / 100, "卖1量": data.get("f40", 0) / 100,
+            "卖2价": data.get("f37", 0) / 100, "卖2量": data.get("f38", 0) / 100,
+            "卖3价": data.get("f35", 0) / 100, "卖3量": data.get("f36", 0) / 100,
+            "卖4价": data.get("f33", 0) / 100, "卖4量": data.get("f34", 0) / 100,
+            "卖5价": data.get("f31", 0) / 100, "卖5量": data.get("f32", 0) / 100,
+        }
     except Exception:
         return None
 
@@ -174,11 +197,10 @@ def load_daily(c, n):
     except Exception: pass
     return pd.DataFrame(), "无"
 
-# 🌟 新增：获取分时数据
+# 获取分时数据
 @st.cache_data(ttl=60)
 def load_intraday(c):
     try:
-        # 使用东财分时接口
         df = ak.stock_intraday_em(symbol=c)
         if not df.empty:
             df['时间'] = pd.to_datetime(df['时间'])
@@ -186,10 +208,8 @@ def load_intraday(c):
             df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
             df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
             
-            # 计算均价（累计成交额 / 累计成交量）
             df['cum_amt'] = df['成交额'].cumsum()
             df['cum_vol'] = df['成交量'].cumsum()
-            # 避免除零
             df['均价'] = df.apply(lambda row: row['cum_amt'] / row['cum_vol'] if row['cum_vol'] > 0 else row['最新价'], axis=1)
             return df
     except Exception:
@@ -296,11 +316,11 @@ if order_book:
     col_sell, col_buy = st.columns(2)
     with col_sell:
         st.caption("🔴 卖盘 (挂单量)")
-        sell_data = [{"档位": f"卖{i}", "价格": order_book.get(f"卖{i}", 0.0), "挂单量": order_book.get(f"卖{i}量", 0) / 100} for i in range(5, 0, -1)]
+        sell_data = [{"档位": f"卖{i}", "价格": order_book.get(f"卖{i}价", 0.0), "挂单量": order_book.get(f"卖{i}量", 0)} for i in range(5, 0, -1)]
         st.dataframe(pd.DataFrame(sell_data), hide_index=True, use_container_width=True)
     with col_buy:
         st.caption("🟢 买盘 (挂单量)")
-        buy_data = [{"档位": f"买{i}", "价格": order_book.get(f"买{i}", 0.0), "挂单量": order_book.get(f"买{i}量", 0) / 100} for i in range(1, 6)]
+        buy_data = [{"档位": f"买{i}", "价格": order_book.get(f"买{i}价", 0.0), "挂单量": order_book.get(f"买{i}量", 0)} for i in range(1, 6)]
         st.dataframe(pd.DataFrame(buy_data), hide_index=True, use_container_width=True)
 else:
     st.info("💡 盘口数据暂不可用（可能处于非交易时段）。")
@@ -308,7 +328,7 @@ else:
 st.divider()
 
 # ==========================================
-# 标签页 (新增分时图作为第一个Tab)
+# 标签页
 # ==========================================
 tab0, tab1, tab2, tab3, tab4 = st.tabs(["⏱️ 当日分时图", "📈 日K线图", "📍 价位明细", "💰 资金流向 (近10日)", "📰 个股新闻 & 🔥 板块热度"])
 
@@ -317,37 +337,16 @@ with tab0:
     if intraday_df.empty:
         st.info("💡 分时数据暂不可用（可能处于非交易时段或接口维护）。请在开盘时间查看！")
     else:
-        # 获取昨收价
         prev_close = df_daily.iloc[-2]['close'] if len(df_daily) >= 2 else df_daily.iloc[-1]['close']
         
         fig_intra = go.Figure()
-        
-        # 绘制价格线 (蓝色)
-        fig_intra.add_trace(go.Scatter(
-            x=intraday_df['时间'], y=intraday_df['最新价'], 
-            mode='lines', name='最新价', 
-            line=dict(color='#1E90FF', width=2)
-        ))
-        
-        # 绘制均价线 (黄色)
-        fig_intra.add_trace(go.Scatter(
-            x=intraday_df['时间'], y=intraday_df['均价'], 
-            mode='lines', name='均价', 
-            line=dict(color='orange', width=1.5)
-        ))
-        
-        # 绘制昨收线 (灰色虚线)
+        fig_intra.add_trace(go.Scatter(x=intraday_df['时间'], y=intraday_df['最新价'], mode='lines', name='最新价', line=dict(color='#1E90FF', width=2)))
+        fig_intra.add_trace(go.Scatter(x=intraday_df['时间'], y=intraday_df['均价'], mode='lines', name='均价', line=dict(color='orange', width=1.5)))
         fig_intra.add_hline(y=prev_close, line_dash="dash", line_color="gray", annotation_text=f"昨收: {prev_close:.2f}", annotation_position="top left")
         
-        # 设置坐标轴
         fig_intra.update_xaxes(type='date', tickformat='%H:%M', title_text="时间", nticks=10)
         fig_intra.update_yaxes(title_text="价格")
-        fig_intra.update_layout(
-            height=500, 
-            margin=dict(l=10, r=10, t=30, b=10),
-            hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-        )
+        fig_intra.update_layout(height=500, margin=dict(l=10, r=10, t=30, b=10), hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
         st.plotly_chart(fig_intra, use_container_width=True, config={'locale': 'zh-CN', 'displaylogo': False})
 
 # === 📈 日K线图 Tab ===
@@ -369,10 +368,7 @@ with tab1:
 
     fig.update_xaxes(type='date', tickformat='%Y-%m-%d', title_text="日期")
     fig.update_yaxes(title_text="价格")
-    fig.update_layout(
-        height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=50, b=10), 
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-    )
+    fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
     st.plotly_chart(fig, use_container_width=True, config={'locale': 'zh-CN', 'displaylogo': False})
 
 # === 📍 价位明细 Tab ===
